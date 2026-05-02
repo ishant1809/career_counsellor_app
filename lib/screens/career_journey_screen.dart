@@ -9,12 +9,11 @@ class CareerJourneyScreen extends StatefulWidget {
 }
 
 class _CareerJourneyScreenState extends State<CareerJourneyScreen> {
-  int completedIndex = -1; // -1 to 8 are the tests
-  String? selectedCareer; // Stores the choice for the final roadmap
+  int completedIndex = -1;
 
   @override
   Widget build(BuildContext context) {
-    bool allTestsDone = completedIndex >= 8;
+    bool assessmentDone = completedIndex >= 5; // All 6 tests completed
 
     return Scaffold(
       backgroundColor: const Color(0xFFF0F4F8),
@@ -44,27 +43,19 @@ class _CareerJourneyScreenState extends State<CareerJourneyScreen> {
                           _testData(0, "Basic Assessment", "The Starting Point", Icons.explore_rounded),
                         ]),
 
-                        _buildPhaseSection("PHASE 2: THE DISCOVERY", [
+                        _buildPhaseSection("PHASE 2: DISCOVERY", [
                           _testData(1, "Personality", "Who are you truly?", Icons.psychology_rounded),
-                          _testData(2, "Passion", "Fuel for your career", Icons.auto_awesome_rounded),
-                          _testData(3, "Lifestyle", "Your ideal environment", Icons.wb_sunny_rounded),
-                          _testData(4, "Family Link", "Support & Heritage", Icons.family_restroom_rounded),
-                          _testData(5, "Interests", "Natural inclinations", Icons.interests_rounded),
-                          _testData(6, "Dreams", "Vision for the future", Icons.rocket_launch_rounded),
+                          _testData(2, "Emotional Quotient", "Your emotional intelligence", Icons.sentiment_satisfied_rounded),
+                          _testData(3, "Orientation Style", "Your work style preference", Icons.public_rounded),
+                          _testData(4, "Career Interests", "Natural inclinations", Icons.interests_rounded),
                         ]),
 
                         _buildPhaseSection("PHASE 3: PERFORMANCE", [
-                          _testData(7, "Aptitude", "Logic & Mental agility", Icons.biotech_rounded),
-                          _testData(8, "Academic", "Current scholastic standing", Icons.school_rounded),
+                          _testData(5, "Aptitude", "Logic & Mental agility", Icons.biotech_rounded),
                         ]),
 
-                        // --- NEW PHASE 4: CAREER SELECTION ---
-                        const SizedBox(height: 30),
-                        _buildPhaseHeader("PHASE 4: TARGET SELECTION"),
-                        _buildCareerSelectionTile(allTestsDone),
-
                         const SizedBox(height: 40),
-                        _buildFinalAction(),
+                        _buildFinalAction(assessmentDone),
                         const SizedBox(height: 50),
                       ],
                     ),
@@ -78,108 +69,8 @@ class _CareerJourneyScreenState extends State<CareerJourneyScreen> {
     );
   }
 
-  // --- NEW COMPONENT: CAREER SELECTION TILE ---
-  Widget _buildCareerSelectionTile(bool isUnlocked) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 20),
-      child: Row(
-        children: [
-          // INDICATOR
-          Container(
-            width: 68,
-            alignment: Alignment.center,
-            child: Container(
-              width: 40, height: 40,
-              decoration: BoxDecoration(
-                color: selectedCareer != null ? const Color(0xFF00C2FF) : (isUnlocked ? Colors.white : Colors.grey.shade200),
-                shape: BoxShape.circle,
-                border: Border.all(color: isUnlocked ? AppTheme.student.withOpacity(0.1) : Colors.transparent, width: 4),
-              ),
-              child: Icon(
-                selectedCareer != null ? Icons.check : (isUnlocked ? Icons.ads_click_rounded : Icons.lock_rounded),
-                size: 18,
-                color: selectedCareer != null ? Colors.white : (isUnlocked ? AppTheme.student : Colors.grey.shade400),
-              ),
-            ),
-          ),
-
-          // CONTENT
-          Expanded(
-            child: GestureDetector(
-              onTap: isUnlocked ? () => _showCareerOptions() : null,
-              child: Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: isUnlocked ? Colors.white : Colors.white.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(color: selectedCareer != null ? const Color(0xFF00C2FF).withOpacity(0.3) : Colors.white),
-                  boxShadow: isUnlocked ? [BoxShadow(color: AppTheme.student.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 8))] : [],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text("Career Options",
-                        style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: isUnlocked ? Colors.black : Colors.grey.shade400)
-                    ),
-                    const SizedBox(height: 4),
-                    Text(selectedCareer ?? (isUnlocked ? "Select your target career path" : "Unlock by completing Phase 3"),
-                        style: TextStyle(fontSize: 12, color: isUnlocked ? AppTheme.student : Colors.grey.shade300, fontWeight: FontWeight.bold)
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // --- CAREER SELECTION MODAL ---
-  void _showCareerOptions() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(30))),
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text("Top AI Recommendations", style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900)),
-              const SizedBox(height: 8),
-              const Text("Based on your 9-layer assessment scores.", style: TextStyle(color: Colors.grey)),
-              const SizedBox(height: 20),
-              _optionItem("Software Architect", "Matches your Aptitude & Academic score"),
-              _optionItem("UI/UX Product Designer", "Matches your Dreams & Passion score"),
-              _optionItem("Cybersecurity Analyst", "Matches your Lifestyle & Logic score"),
-              const SizedBox(height: 20),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _optionItem(String title, String matchReason) {
-    return ListTile(
-      onTap: () {
-        setState(() => selectedCareer = title);
-        Navigator.pop(context);
-      },
-      contentPadding: const EdgeInsets.symmetric(vertical: 8),
-      leading: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: AppTheme.student.withOpacity(0.05), borderRadius: BorderRadius.circular(10)), child: const Icon(Icons.stars_rounded, color: AppTheme.student)),
-      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Text(matchReason, style: const TextStyle(fontSize: 11)),
-      trailing: const Icon(Icons.add_circle_outline_rounded, color: AppTheme.student),
-    );
-  }
-
   // --- UPDATED FINAL ACTION LOGIC ---
-  Widget _buildFinalAction() {
-    bool isReady = selectedCareer != null; // Button only glows after career selection
+  Widget _buildFinalAction(bool isReady) {
     return Container(
       width: double.infinity,
       height: 65,
@@ -191,10 +82,15 @@ class _CareerJourneyScreenState extends State<CareerJourneyScreen> {
       ),
       child: ElevatedButton(
         onPressed: isReady ? () {
-          // Navigate to final roadmap screen
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text("All Assessments Complete!"),
+              backgroundColor: Colors.green,
+            ),
+          );
         } : null,
         style: ElevatedButton.styleFrom(backgroundColor: Colors.transparent, shadowColor: Colors.transparent),
-        child: const Text("GENERATE MY ROADMAP", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1)),
+        child: const Text("ALL ASSESSMENTS COMPLETE", style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, letterSpacing: 1)),
       ),
     );
   }
@@ -222,7 +118,7 @@ class _CareerJourneyScreenState extends State<CareerJourneyScreen> {
       children: [
         const Text("The Road to\nDiscovery", style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900, height: 1.1, letterSpacing: -1)),
         const SizedBox(height: 10),
-        Text("Complete all layers to unlock your AI-generated Career Roadmap.", style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 14, fontWeight: FontWeight.w500)),
+        Text("Complete all 6 assessments to unlock your AI-generated Career Roadmap.", style: TextStyle(color: Colors.blueGrey.shade400, fontSize: 14, fontWeight: FontWeight.w500)),
       ],
     );
   }

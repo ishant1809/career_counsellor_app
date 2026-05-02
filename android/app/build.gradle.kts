@@ -39,9 +39,11 @@ android {
     }
 }
 
-// ✅ FIXED: Modern Kotlin Compiler Settings (Replaces the deprecated kotlinOptions)
-kotlin {
-    jvmToolchain(17)
+// ✅ FIXED: Modern compilerOptions DSL (kotlinOptions is deprecated)
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 flutter {

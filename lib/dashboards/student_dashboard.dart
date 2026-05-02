@@ -24,10 +24,6 @@ class _StudentDashboardState extends State<StudentDashboard> {
   String _userName = "Student";
   List<dynamic> _recommendedMentors = []; // ✅ New state for backend mentors
 
-  // Superpower values (0.0 to 1.0)
-  double _logicalScore = 0.0;
-  double _quantScore = 0.0;
-  double _verbalScore = 0.0;
 
   @override
   void initState() {
@@ -43,27 +39,15 @@ class _StudentDashboardState extends State<StudentDashboard> {
       final aspiration = profileData['aspiration_data'] ?? {};
       String goal = aspiration['dream_career'] ?? "technology";
       final mentors = await _apiService.searchMentors(careerGoal: goal);
-
-      // --- UPDATED SCORE EXTRACTION LOGIC ---
-      final Map<String, dynamic> apti = profileData['apti_data'] ?? {};
-
-      // Check if data is nested in 'scores' or 'payload' or just at the top level
-      final Map<String, dynamic> dataBuffer = apti['scores'] ?? apti['payload'] ?? apti;
-
-      final double max = (dataBuffer['max_score'] ?? 15).toDouble();
-
       if (mounted) {
         setState(() {
           _hasActiveRoadmap = roadmap != null;
           _userName = profileData['full_name'] ?? "Student";
           _recommendedMentors = mentors;
-          _logicalScore = ((dataBuffer['logical'] ?? dataBuffer['logical_score'] ?? 0).toDouble()) / max;
-          _quantScore = ((dataBuffer['quantitative'] ?? dataBuffer['quantitative_score'] ?? 0).toDouble()) / max;
-          _verbalScore = ((dataBuffer['verbal'] ?? dataBuffer['verbal_score'] ?? 0).toDouble()) / max;
-
           _isLoadingStatus = false;
         });
       }
+
     } catch (e) {
       debugPrint("❌ Error loading dashboard data: $e");
       if (mounted) setState(() => _isLoadingStatus = false);
@@ -122,11 +106,7 @@ class _StudentDashboardState extends State<StudentDashboard> {
                 _buildStatItem("18", "CHATS", Icons.chat_bubble_outline_rounded),
               ],
             ),
-            const SizedBox(height: 32),
-            const Text("Your Superpowers", style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
             const SizedBox(height: 16),
-            _buildStrengthPreview(),
-            const SizedBox(height: 32),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
@@ -168,49 +148,6 @@ class _StudentDashboardState extends State<StudentDashboard> {
     );
   }
 
-  // --- UI HELPERS (UNCHANGED DESIGN) ---
-
-  Widget _buildStrengthPreview() {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(24),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.02), blurRadius: 20, offset: const Offset(0, 10))]
-      ),
-      child: Column(
-        children: [
-          _buildStrengthBar("Logical Reasoning", _logicalScore, Colors.blue),
-          const SizedBox(height: 14),
-          _buildStrengthBar("Quantitative Aptitude", _quantScore, Colors.purple),
-          const SizedBox(height: 14),
-          _buildStrengthBar("Verbal Ability", _verbalScore, Colors.orange),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStrengthBar(String label, double progress, Color color) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blueGrey)),
-          Text("${(progress * 100).toInt()}%", style: TextStyle(color: color, fontWeight: FontWeight.bold, fontSize: 12))
-        ]),
-        const SizedBox(height: 8),
-        ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: LinearProgressIndicator(
-                value: progress,
-                minHeight: 6,
-                backgroundColor: color.withOpacity(0.1),
-                valueColor: AlwaysStoppedAnimation(color)
-            )
-        ),
-      ],
-    );
-  }
 
   Widget _buildBottomNav() {
     return Container(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import '../theme/app_theme.dart';
 import '../services/assessment_service.dart';
 
@@ -6,11 +7,13 @@ class QuestionScreen extends StatefulWidget {
   final String title;
   final Map<String, dynamic> data;
   final String? currentClass;
+  final String testKey;
 
   const QuestionScreen({
     super.key,
     required this.title,
     required this.data,
+    required this.testKey,
     this.currentClass,
   });
 
@@ -19,324 +22,411 @@ class QuestionScreen extends StatefulWidget {
 }
 
 class _QuestionScreenState extends State<QuestionScreen> {
-  final Map<String, dynamic> _answers = {};
+  final PageController _pageController = PageController();
   final AssessmentService _apiService = AssessmentService();
+  
+  int _currentIndex = 0;
   bool _isSubmitting = false;
+  bool _isLoadingProgress = true;
+  
+  List<dynamic> _questions = [];
+  Map<String, dynamic> _answers = {};
+  
+  // For standard modules that use field_configs
+  Map<String, dynamic> _configs = {};
 
-  final Map<String, Map<String, dynamic>> localConfigs = {
-    "gender": {"type": "selection", "options": ["Male", "Female", "Non-binary", "Prefer not to say"]},
-    "current_class": {
-      "type": "selection",
-      "options": ["6th", "7th", "8th", "9th", "10th", "11th", "12th", "College 1st Year", "College 2nd Year", "College 3rd Year"]
-    },
-    "school_type": {"type": "selection", "options": ["Government", "Private", "International", "Semi-Government"]},
-    "medium_of_learning": {"type": "selection", "options": ["English", "Hindi", "Regional Language", "Mixed"]},
-  };
+  @override
+  void initState() {
+    super.initState();
+    _initializeTest();
+  }
+
+  Future<void> _initializeTest() async {
+    try {
+      // 1. Prepare questions list
+      if (widget.testKey == "eq" || widget.testKey == "orientation" || widget.testKey == "interest") {
+        _questions = widget.data['questions'] ?? [];
+      } else {
+        final Map<String, dynamic> rawQuestions = widget.data['questions'] ?? {};
+        _configs = (rawQuestions['field_configs'] is Map)
+            ? Map<String, dynamic>.from(rawQuestions['field_configs'])
+            : (widget.data['field_configs'] is Map)
+                ? Map<String, dynamic>.from(widget.data['field_configs'])
+                : {};
+
+        final entries = rawQuestions.entries.where((e) =>
+            e.key != "null" &&
+            e.key.isNotEmpty &&
+            e.value != null &&
+            e.key != "field_configs").toList();
+            
+        _questions = entries.map((e) => {"id": e.key, ... (e.value is Map ? e.value : {"text": e.value.toString()})}).toList();
+      }
+
+      // 2. Load saved progress from backend
+      final progress = await _apiService.getTestProgress(widget.testKey);
+      if (progress != null && progress['in_progress'] == true) {
+        setState(() {
+          _answers = Map<String, dynamic>.from(progress['answers'] ?? {});
+          _currentIndex = progress['current_index'] ?? 0;
+          _isLoadingProgress = false;
+        });
+        
+        // Jump to saved index after build
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (_pageController.hasClients) {
+            _pageController.jumpToPage(_currentIndex);
+          }
+        });
+      } else {
+        setState(() => _isLoadingProgress = false);
+      }
+    } catch (e) {
+      debugPrint("Error initializing test: $e");
+      setState(() => _isLoadingProgress = false);
+    }
+  }
+
+  void _saveProgress() {
+    _apiService.saveTestProgress(
+      testKey: widget.testKey,
+      sessionQuestions: _questions,
+      answers: _answers,
+      currentIndex: _currentIndex,
+    );
+  }
+
+  void _handleAnswer(String questionId, dynamic value) {
+    setState(() {
+      _answers[questionId] = value;
+    });
+    _saveProgress();
+    
+    // Auto-advance for multiple choice/Likert after a short delay
+    if (_currentIndex < _questions.length - 1) {
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (mounted) {
+          _pageController.nextPage(
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          );
+        }
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final Map<String, dynamic> rawQuestions = widget.data['questions'] ?? {};
+    if (_isLoadingProgress) {
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator(color: AppTheme.student)),
+      );
+    }
 
-    final Map<String, dynamic> configs = (rawQuestions['field_configs'] is Map)
-        ? Map<String, dynamic>.from(rawQuestions['field_configs'])
-        : (widget.data['field_configs'] is Map)
-        ? Map<String, dynamic>.from(widget.data['field_configs'])
-        : {};
+    if (_questions.isEmpty) {
+      return Scaffold(
+        appBar: AppBar(title: Text(widget.title)),
+        body: const Center(child: Text("No questions available.")),
+      );
+    }
 
-    final questions = Map.fromEntries(
-      rawQuestions.entries.where((e) =>
-      e.key != "null" &&
-          e.key.isNotEmpty &&
-          e.value != null &&
-          e.key != "field_configs"
-      ),
-    );
+    final double progress = (_currentIndex + 1) / _questions.length;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F7FE),
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text(widget.title, style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-        backgroundColor: AppTheme.student,
-        foregroundColor: Colors.white,
-        centerTitle: true,
+        backgroundColor: Colors.white,
         elevation: 0,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Colors.black, size: 20),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Column(
+          children: [
+            Text(
+              widget.title.toUpperCase(),
+              style: const TextStyle(color: Colors.black, fontSize: 12, fontWeight: FontWeight.w900, letterSpacing: 1.5),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              "${_currentIndex + 1} of ${_questions.length}",
+              style: TextStyle(color: Colors.grey.shade500, fontSize: 10, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        centerTitle: true,
       ),
-      body: Stack(
+      body: Column(
         children: [
-          ListView.builder(
-            padding: const EdgeInsets.fromLTRB(20, 20, 20, 120),
-            itemCount: questions.length,
-            itemBuilder: (context, index) {
-              String key = questions.keys.elementAt(index);
-              return _buildQuestionCard(key, questions[key], configs[key]);
-            },
+          // Progress bar
+          Container(
+            height: 4,
+            width: double.infinity,
+            color: Colors.grey.shade100,
+            child: FractionallySizedBox(
+              alignment: Alignment.centerLeft,
+              widthFactor: progress,
+              child: Container(
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(colors: [AppTheme.student, Color(0xFF6A5AE0)]),
+                ),
+              ),
+            ),
           ),
-          Positioned(bottom: 0, left: 0, right: 0, child: _buildSubmitBar()),
+          
+          Expanded(
+            child: PageView.builder(
+              controller: _pageController,
+              physics: const NeverScrollableScrollPhysics(), // Force using buttons for control
+              itemCount: _questions.length,
+              onPageChanged: (index) {
+                setState(() => _currentIndex = index);
+              },
+              itemBuilder: (context, index) {
+                final q = _questions[index];
+                return _buildQuestionPage(q);
+              },
+            ),
+          ),
+          
+          _buildNavigationFooter(),
         ],
       ),
     );
   }
 
-  Widget _buildQuestionCard(String key, dynamic value, Map<String, dynamic>? config) {
-    String displayQuestion = "";
-    List<String> parsedOptions = [];
-    bool isAptitude = widget.title.toLowerCase() == "aptitude";
-    String? category;
+  Widget _buildQuestionPage(dynamic q) {
+    final String qId = q['id']?.toString() ?? "";
+    final String text = q['text'] ?? q['question_text'] ?? "No question text";
+    final category = q['category'];
 
-    if (value is Map && isAptitude) {
-      String rawText = value['text'] ?? "";
-      category = value['category'];
-
-      final qMatch = RegExp(r"Question: (.*?)(?=A\)|$)").firstMatch(rawText.replaceAll('\n', ' '));
-      displayQuestion = qMatch?.group(1)?.trim() ?? rawText;
-
-      final a = RegExp(r"A\) (.*?)(?=B\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
-      final b = RegExp(r"B\) (.*?)(?=C\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
-      final c = RegExp(r"C\) (.*?)(?=D\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
-      final d = RegExp(r"D\) (.*?)(?=Correct|Explanation|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
-
-      if (a != null && b != null && c != null && d != null) {
-        parsedOptions = [a, b, c, d];
-      }
-    } else if (value is Map) {
-      displayQuestion = value['text'] ?? "No question text";
-    } else {
-      displayQuestion = value.toString();
-    }
-
-    Map<String, dynamic>? finalConfig = config ?? localConfigs[key];
-    String? backendType = finalConfig?['type'] ?? _inferTypeFromKey(key);
-
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4))],
-      ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (category != null)
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              margin: const EdgeInsets.only(bottom: 10),
+              margin: const EdgeInsets.only(bottom: 16),
               decoration: BoxDecoration(
                 color: AppTheme.student.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Text(
-                category.toUpperCase(),
-                style: TextStyle(color: AppTheme.student, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                category.toString().toUpperCase(),
+                style: const TextStyle(color: AppTheme.student, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1),
               ),
             ),
+            
           Text(
-            displayQuestion,
-            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15, color: Color(0xFF1A2138), height: 1.5),
+            text,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFF1A2138), height: 1.3),
           ),
-          const SizedBox(height: 20),
-
-          if (isAptitude && parsedOptions.isNotEmpty)
-            ...List.generate(4, (index) {
-              String label = ["A", "B", "C", "D"][index];
-              bool isSelected = _answers[key] == label;
-              return GestureDetector(
-                onTap: () => setState(() => _answers[key] = label),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  margin: const EdgeInsets.only(bottom: 10),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  decoration: BoxDecoration(
-                    color: isSelected ? AppTheme.student.withOpacity(0.05) : const Color(0xFFF8F9FB),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: isSelected ? AppTheme.student : Colors.transparent, width: 1.5),
-                  ),
-                  child: Row(
-                    children: [
-                      CircleAvatar(
-                        radius: 12,
-                        backgroundColor: isSelected ? AppTheme.student : Colors.grey.shade300,
-                        child: Text(label, style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text(
-                          parsedOptions[index],
-                          style: TextStyle(
-                            fontSize: 13,
-                            color: isSelected ? AppTheme.student : Colors.black87,
-                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            })
-
-          else if (backendType == "scale" || (value is Map && value.containsKey('trait')))
-            _buildDynamicSlider(key, finalConfig)
-
-          else if (backendType == "selection" || backendType == "boolean")
-              DropdownButtonFormField<String>(
-                decoration: _inputDecoration(),
-                hint: const Text("Select option...", style: TextStyle(fontSize: 13)),
-                items: (backendType == "boolean"
-                    ? ["Yes", "No"]
-                    : _getEffectiveOptions(displayQuestion, finalConfig))
-                    .map((val) => DropdownMenuItem(value: val, child: Text(val)))
-                    .toList(),
-                onChanged: (val) => setState(() => _answers[key] = val),
-              )
-
-            else
-              TextField(
-                keyboardType: backendType == "number" ? TextInputType.number : TextInputType.text,
-                maxLines: backendType == "textarea" ? 4 : 1,
-                decoration: _inputDecoration(hint: "Enter your answer..."),
-                onChanged: (val) => _answers[key] = (backendType == "number") ? int.tryParse(val) : val,
-              ),
+          
+          const SizedBox(height: 40),
+          
+          Expanded(
+            child: SingleChildScrollView(
+              child: _buildInputForQuestion(qId, q),
+            ),
+          ),
         ],
       ),
     );
   }
 
-  String _inferTypeFromKey(String key) {
-    if (key.contains("gender") || key.contains("class") || key.contains("school") || key.contains("medium")) {
-      return "selection";
+  Widget _buildInputForQuestion(String qId, dynamic q) {
+    final bool isPsychometric = widget.testKey == "eq" || widget.testKey == "orientation" || widget.testKey == "interest";
+    
+    if (isPsychometric) {
+      return _buildLikertInput(qId);
     }
-    return "text";
+
+    // Aptitude Logic
+    if (widget.testKey == "aptitude") {
+      return _buildAptitudeOptions(qId, q['text'] ?? "");
+    }
+
+    // Standard Assessment Logic (Basic / Personality)
+    final config = _configs[qId] ?? {};
+    final String type = config['type'] ?? _inferTypeFromKey(qId);
+    
+    if (type == "selection") {
+      final List<String> options = List<String>.from(config['options'] ?? ["Yes", "No"]);
+      return Column(
+        children: options.map((opt) => _buildOptionCard(qId, opt, opt)).toList(),
+      );
+    } else if (type == "number") {
+      return TextField(
+        keyboardType: TextInputType.number,
+        decoration: _inputDecoration(hint: "Enter number..."),
+        onChanged: (val) => _answers[qId] = int.tryParse(val),
+      );
+    } else {
+      return TextField(
+        decoration: _inputDecoration(hint: "Your answer..."),
+        onChanged: (val) => _answers[qId] = val,
+      );
+    }
   }
 
-  Widget _buildDynamicSlider(String key, Map<String, dynamic>? config) {
-    double maxVal = (config?['max'] ?? 5).toDouble();
-    double minVal = (config?['min'] ?? 1).toDouble();
-    double currentVal = (_answers[key] ?? ((maxVal + minVal) / 2).round()).toDouble();
+  Widget _buildLikertInput(String qId) {
+    final List<String> labels = ["Strongly Disagree", "Disagree", "Neutral", "Agree", "Strongly Agree"];
+    final currentVal = _answers[qId];
 
     return Column(
-      children: [
-        Slider(
-          value: currentVal,
-          min: minVal,
-          max: maxVal,
-          divisions: (maxVal - minVal).toInt(),
-          activeColor: AppTheme.student,
-          onChanged: (val) => setState(() => _answers[key] = val.toInt()),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 8),
+      children: List.generate(5, (i) {
+        final int score = i + 1;
+        final bool isSelected = currentVal == score;
+        return _buildOptionCard(qId, labels[i], score, isSelected: isSelected);
+      }),
+    );
+  }
+
+  Widget _buildAptitudeOptions(String qId, String rawText) {
+    // Basic parser for A) B) C) D) format
+    final a = RegExp(r"A\) (.*?)(?=B\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
+    final b = RegExp(r"B\) (.*?)(?=C\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
+    final c = RegExp(r"C\) (.*?)(?=D\)|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
+    final d = RegExp(r"D\) (.*?)(?=Correct|Explanation|$)").firstMatch(rawText.replaceAll('\n', ' '))?.group(1)?.trim();
+
+    if (a == null || b == null || c == null || d == null) {
+      return const Text("Format Error in question text.");
+    }
+
+    final options = {"A": a, "B": b, "C": c, "D": d};
+    return Column(
+      children: options.entries.map((e) => _buildOptionCard(qId, "${e.key}) ${e.value}", e.key)).toList(),
+    );
+  }
+
+  Widget _buildOptionCard(String qId, String label, dynamic value, {bool? isSelected}) {
+    final bool selected = isSelected ?? (_answers[qId] == value);
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: InkWell(
+        onTap: () => _handleAnswer(qId, value),
+        borderRadius: BorderRadius.circular(16),
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          decoration: BoxDecoration(
+            color: selected ? AppTheme.student.withOpacity(0.08) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: selected ? AppTheme.student : Colors.grey.shade200,
+              width: 2,
+            ),
+          ),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _sliderLabel(maxVal > 5 ? "Min" : "Strongly\nDisagree"),
-              if (maxVal <= 5) _sliderLabel("Neutral"),
-              _sliderLabel(maxVal > 5 ? "Max" : "Strongly\nAgree"),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+                    color: selected ? AppTheme.student : const Color(0xFF1A2138),
+                  ),
+                ),
+              ),
+              if (selected)
+                const Icon(Icons.check_circle, color: AppTheme.student, size: 24),
             ],
           ),
         ),
-      ],
+      ),
     );
   }
 
-  Widget _sliderLabel(String text) => Text(
-    text,
-    textAlign: TextAlign.center,
-    style: const TextStyle(fontSize: 10, color: Colors.grey, fontWeight: FontWeight.bold),
-  );
+  Widget _buildNavigationFooter() {
+    final bool isLast = _currentIndex == _questions.length - 1;
+    final bool canGoBack = _currentIndex > 0;
+    final bool isAnswered = _answers.containsKey(_questions[_currentIndex]['id']?.toString());
 
-  InputDecoration _inputDecoration({String? hint}) => InputDecoration(
-    filled: true,
-    fillColor: const Color(0xFFF8F9FB),
-    hintText: hint,
-    hintStyle: TextStyle(color: Colors.grey.shade400, fontSize: 13),
-    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-    border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
-    enabledBorder: OutlineInputBorder(
-      borderRadius: BorderRadius.circular(16),
-      borderSide: BorderSide(color: Colors.grey.shade100),
-    ),
-  );
-
-  List<String> _getEffectiveOptions(String label, Map<String, dynamic>? config) {
-    if (config != null && config.containsKey('options')) return List<String>.from(config['options']);
-    return ["Option 1", "Option 2"];
-  }
-
-  Widget _buildSubmitBar() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
+      padding: const EdgeInsets.fromLTRB(24, 20, 24, 40),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 10, offset: const Offset(0, -5))],
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(30)),
       ),
-      child: ElevatedButton(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: AppTheme.student,
-          minimumSize: const Size(double.infinity, 60),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
-          elevation: 0,
-        ),
-        onPressed: _isSubmitting ? null : _handleFinalSubmit,
-        child: _isSubmitting
-            ? const SizedBox(height: 24, width: 24, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3))
-            : const Text("SUBMIT ASSESSMENT", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+      child: Row(
+        children: [
+          if (canGoBack)
+            Expanded(
+              child: OutlinedButton(
+                onPressed: () => _pageController.previousPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut),
+                style: OutlinedButton.styleFrom(
+                  minimumSize: const Size(0, 56),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+                child: const Text("PREVIOUS", style: TextStyle(fontWeight: FontWeight.bold)),
+              ),
+            ),
+          if (canGoBack) const SizedBox(width: 16),
+          Expanded(
+            flex: 2,
+            child: ElevatedButton(
+              onPressed: !isAnswered || _isSubmitting ? null : (isLast ? _handleSubmit : () => _pageController.nextPage(duration: const Duration(milliseconds: 300), curve: Curves.easeInOut)),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppTheme.student,
+                minimumSize: const Size(0, 56),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                elevation: 0,
+              ),
+              child: _isSubmitting
+                  ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : Text(isLast ? "SUBMIT" : "NEXT", style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  // ✅ KEY CHANGE: Returns Map with success + answers instead of just bool
-  // inside _QuestionScreenState in ques_screen.dart
-
-  void _handleFinalSubmit() async {
-    // ✅ 1. Get total count of actual questions (excluding metadata)
-    final rawQuestions = widget.data['questions'] ?? {};
-    final totalQuestions = rawQuestions.entries.where((e) =>
-    e.key != "null" && e.key.isNotEmpty && e.value != null && e.key != "field_configs"
-    ).length;
-
-    // ✅ 2. Validate: Answers count must match total questions
-    if (_answers.length < totalQuestions) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text("Please answer all $totalQuestions questions before submitting."),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      return;
-    }
-
+  void _handleSubmit() async {
     setState(() => _isSubmitting = true);
-
     try {
-      bool success = await _apiService.submitAnswers(widget.title, _answers);
+      final bool isPsychometric = widget.testKey == "eq" || widget.testKey == "orientation" || widget.testKey == "interest";
+      
+      bool success;
+      if (isPsychometric) {
+        final List<Map<String, dynamic>> answerList = _answers.entries
+            .map((e) => {"question_id": int.tryParse(e.key) ?? 0, "score": e.value})
+            .toList();
+        success = await _apiService.submitAnswers(widget.title, {}, psychometricAnswers: answerList);
+      } else {
+        success = await _apiService.submitAnswers(widget.title, _answers);
+      }
 
       if (mounted) {
         setState(() => _isSubmitting = false);
         if (success) {
-          // ✅ 3. Return results to parent
-          Navigator.pop(context, {
-            "success": true,
-            "answers": Map<String, dynamic>.from(_answers),
-            "rawQuestions": rawQuestions, // Pass this back for scoring in Aptitude
-          });
+          Navigator.pop(context, {"success": true, "answers": _answers});
         } else {
-          _showErrorSnackBar("Submission failed. Please try again.");
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Submission failed.")));
         }
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isSubmitting = false);
-        _showErrorSnackBar("Error: $e");
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Error: $e")));
       }
     }
   }
 
-  void _showErrorSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(message), backgroundColor: Colors.redAccent),
-    );
+  String _inferTypeFromKey(String key) {
+    if (key.contains("gender") || key.contains("class") || key.contains("school") || key.contains("medium")) return "selection";
+    return "text";
   }
+
+  InputDecoration _inputDecoration({String? hint}) => InputDecoration(
+        filled: true,
+        fillColor: Colors.grey.shade50,
+        hintText: hint,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+        contentPadding: const EdgeInsets.all(20),
+      );
 }

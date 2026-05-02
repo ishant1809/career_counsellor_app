@@ -8,17 +8,23 @@ class AssessmentService {
   String get baseUrl =>
       (dotenv.env['API_BASE_URL'] ?? "").replaceAll(RegExp(r'/$'), '');
 
+  // Maps UI title → module key used in API calls
   static const Map<String, String> moduleMapping = {
     "Basic Assessment": "profile",
     "Personality": "personality",
-    "Passion": "passion",
-    "Lifestyle": "lifestyle",
-    "Family Link": "financial",
-    "Interests": "interests",
-    "Dreams": "aspiration",
     "Aptitude": "aptitude",
-    "Academic": "academic",
+    "Emotional Quotient": "eq",
+    "Orientation Style": "orientation",
+    "Career Interests": "interest",
   };
+
+  // These modules use the /psychometrics/ endpoint (list-based, 1-5 Likert scale)
+  // Submit format: { user_id, answers: [{question_id, score}] }
+  static const Set<String> psychometricModules = {"eq", "orientation", "interest"};
+
+  // Personality also uses psychometrics endpoint for fetching
+  // but has its own table — kept separate for clarity
+  static const Set<String> psychometricFetchModules = {"eq", "orientation", "interest"};
 
   Future<Map<String, String>> _getHeaders() async {
     final token = await TokenService.getToken();
@@ -31,14 +37,12 @@ class AssessmentService {
   static String mapClassToGradeBand(String? currentClass) {
     if (currentClass == null || currentClass.isEmpty) return "6-8";
     final classLower = currentClass.toLowerCase().trim();
-    if (classLower.contains("6") || classLower.contains("7") ||
-        classLower.contains("8")) return "6-8";
-    if (classLower.contains("9") || classLower.contains("10") ||
-        classLower.contains("11")) return "9-11";
+    if (classLower.contains("6") || classLower.contains("7") || classLower.contains("8")) return "6-8";
+    if (classLower.contains("9") || classLower.contains("10") || classLower.contains("11")) return "9-11";
     return "9-11";
   }
 
-  // ── USER PROFILE ─────────────────────────────────────────────────────────
+  // ── USER PROFILE ──────────────────────────────────────────────────────────
 
   Future<Map<String, dynamic>> getUserProfile() async {
     final url = "$baseUrl/api/v1/auth/users/me/";
@@ -82,10 +86,8 @@ class AssessmentService {
       final response = await http
           .get(url, headers: await _getHeaders())
           .timeout(const Duration(seconds: 15));
-
       if (response.statusCode == 200) return json.decode(response.body);
-      debugPrint(
-          "getChatMessages error ${response.statusCode}: ${response.body}");
+      debugPrint("getChatMessages error ${response.statusCode}: ${response.body}");
       return [];
     } catch (e) {
       debugPrint("❌ getChatMessages exception: $e");
@@ -101,13 +103,11 @@ class AssessmentService {
       final response = await http
           .post(Uri.parse(url), headers: await _getHeaders())
           .timeout(const Duration(seconds: 45));
-
       if (response.statusCode == 200) {
         return json.decode(response.body);
       } else {
         final error = json.decode(response.body);
-        throw Exception(
-            error['detail'] ?? "AI Recommendation failed: ${response.statusCode}");
+        throw Exception(error['detail'] ?? "AI Recommendation failed: ${response.statusCode}");
       }
     } catch (e) {
       throw Exception("AI Engine Error: $e");
@@ -133,38 +133,81 @@ class AssessmentService {
 
   // ── FETCH QUESTIONS ───────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>> fetchQuestions(String uiTitle,
-      {String? grade, String? currentClass}) async {
+  Future<Map<String, dynamic>> fetchQuestions(
+    String uiTitle, {
+    String? grade,
+    String? currentClass,
+  }) async {
     final moduleName = moduleMapping[uiTitle] ?? uiTitle.toLowerCase();
-    String url = "$baseUrl/api/v1/assessments/questions/$moduleName";
 
-    if (moduleName == "aptitude") {
-      final targetGrade = grade ?? mapClassToGradeBand(currentClass);
-      url += "?target_grade=$targetGrade";
+    // EQ, Orientation, Career Interests → /psychometrics/{module}/questions?limit=15
+    // Returns: { module, total_questions, questions: [{id, text}, ...] }
+    if (psychometricFetchModules.contains(moduleName)) {
+      final url = "$baseUrl/api/v1/psychometrics/$moduleName/questions?limit=15";
+      try {
+        final response = await http
+            .get(Uri.parse(url), headers: await _getHeaders())
+            .timeout(const Duration(seconds: 15));
+        if (response.statusCode == 200) {
+          return json.decode(response.body);
+        } else {
+          final body = json.decode(response.body);
+          throw Exception(body['detail'] ?? "Fetch failed for $moduleName");
+        }
+      } catch (e) {
+        throw Exception("Connection error fetching $moduleName: $e");
+      }
     }
 
+    // Aptitude → /assessments/questions/aptitude?target_grade=...
+    if (moduleName == "aptitude") {
+      final targetGrade = grade ?? mapClassToGradeBand(currentClass);
+      final url = "$baseUrl/api/v1/assessments/questions/aptitude?target_grade=$targetGrade";
+      try {
+        final response = await http
+            .get(Uri.parse(url), headers: await _getHeaders())
+            .timeout(const Duration(seconds: 15));
+        if (response.statusCode == 200) {
+          return json.decode(response.body);
+        } else {
+          final body = json.decode(response.body);
+          throw Exception(body['detail'] ?? "Fetch failed for aptitude");
+        }
+      } catch (e) {
+        throw Exception("Connection error fetching aptitude: $e");
+      }
+    }
+
+    // Basic Assessment & Personality → /assessments/questions/{module}
+
+    // Basic Assessment & Personality → /assessments/questions/{module}
+    final url = "$baseUrl/api/v1/assessments/questions/$moduleName";
     try {
       final response = await http
           .get(Uri.parse(url), headers: await _getHeaders())
           .timeout(const Duration(seconds: 15));
-
       if (response.statusCode == 200) {
         return json.decode(response.body);
       } else {
-        throw Exception(
-            json.decode(response.body)['detail'] ?? "Fetch failed");
+        final body = json.decode(response.body);
+        throw Exception(body['detail'] ?? "Fetch failed for $moduleName");
       }
     } catch (e) {
-      throw Exception("Connection error: $e");
+      throw Exception("Connection error fetching $moduleName: $e");
     }
   }
 
   // ── SUBMIT ANSWERS ────────────────────────────────────────────────────────
 
   Future<bool> submitAnswers(
-      String uiTitle, Map<String, dynamic> answers) async {
-    final moduleKey = moduleMapping[uiTitle] ?? uiTitle.toLowerCase();
-    final url = "$baseUrl/api/v1/assessments/submit-generic";
+    String uiTitle,
+    Map<String, dynamic> answers, {
+    // For psychometric modules, answers must be passed as
+    // { "question_id_string": score_int } e.g. {"123": 4, "456": 2}
+    // This method converts them to the List<{question_id, score}> the backend needs
+    List<Map<String, dynamic>>? psychometricAnswers,
+  }) async {
+    final moduleName = moduleMapping[uiTitle] ?? uiTitle.toLowerCase();
 
     final userId = await TokenService.getUserId();
     if (userId == null) {
@@ -172,39 +215,150 @@ class AssessmentService {
       return false;
     }
 
+    // EQ, Orientation, Career Interests → /psychometrics/{module}/score
+    // Body: { user_id, answers: [{question_id: int, score: int}] }
+    if (psychometricModules.contains(moduleName)) {
+      final url = "$baseUrl/api/v1/psychometrics/$moduleName/score";
+
+      // Convert map {"123": 4, "456": 2} → [{question_id: 123, score: 4}, ...]
+      final List<Map<String, dynamic>> answerList = psychometricAnswers ??
+          answers.entries.map((e) {
+            return {
+              "question_id": int.tryParse(e.key.toString()) ?? 0,
+              "score": e.value is int ? e.value : int.tryParse(e.value.toString()) ?? 3,
+            };
+          }).toList();
+
+      final Map<String, dynamic> requestBody = {
+        "user_id": userId,
+        "answers": answerList,
+      };
+
+      try {
+        final response = await http
+            .post(
+              Uri.parse(url),
+              headers: await _getHeaders(),
+              body: json.encode(requestBody),
+            )
+            .timeout(const Duration(seconds: 15));
+
+        if (response.statusCode == 200 || response.statusCode == 201) {
+          debugPrint("✅ $moduleName submitted successfully");
+          return true;
+        } else {
+          debugPrint("❌ Submit failed for $moduleName: ${response.body}");
+          return false;
+        }
+      } catch (e) {
+        debugPrint("❌ Submit error for $moduleName: $e");
+        return false;
+      }
+    }
+
+    // Basic Assessment, Personality, Aptitude → /assessments/submit-generic
+    // Body: { user_id, module_key, payload }
+    final url = "$baseUrl/api/v1/assessments/submit-generic";
     final Map<String, dynamic> requestBody = {
       "user_id": userId,
-      "module_key": moduleKey,
+      "module_key": moduleName,
       "payload": answers,
     };
 
     try {
       final response = await http
-          .post(Uri.parse(url),
-          headers: await _getHeaders(), body: json.encode(requestBody))
+          .post(
+            Uri.parse(url),
+            headers: await _getHeaders(),
+            body: json.encode(requestBody),
+          )
           .timeout(const Duration(seconds: 15));
 
-      return (response.statusCode == 200 || response.statusCode == 201);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        debugPrint("✅ $moduleName submitted successfully");
+        return true;
+      } else {
+        debugPrint("❌ Submit failed for $moduleName: ${response.body}");
+        return false;
+      }
     } catch (e) {
+      debugPrint("❌ Submit error for $moduleName: $e");
       return false;
+    }
+  }
+
+  // ── TEST PROGRESS ────────────────────────────────────────────────────────
+
+  Future<bool> saveTestProgress({
+    required String testKey,
+    required List<dynamic> sessionQuestions,
+    required Map<String, dynamic> answers,
+    required int currentIndex,
+  }) async {
+    final userId = await TokenService.getUserId();
+    if (userId == null) return false;
+
+    final url = "$baseUrl/api/v1/assessments/save-progress";
+    final body = {
+      "user_id": userId,
+      "test_key": testKey,
+      "session_questions": sessionQuestions,
+      "answers": answers,
+      "current_index": currentIndex,
+    };
+
+    try {
+      final response = await http.patch(
+        Uri.parse(url),
+        headers: await _getHeaders(),
+        body: json.encode(body),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      debugPrint("❌ saveTestProgress error: $e");
+      return false;
+    }
+  }
+
+  Future<Map<String, dynamic>?> getTestProgress(String testKey) async {
+    final userId = await TokenService.getUserId();
+    if (userId == null) return null;
+
+    final url = "$baseUrl/api/v1/assessments/progress/$testKey/$userId";
+    try {
+      final response = await http.get(Uri.parse(url), headers: await _getHeaders());
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+      return null;
+    } catch (e) {
+      debugPrint("❌ getTestProgress error: $e");
+      return null;
+    }
+  }
+
+  Future<Map<String, dynamic>> getAptitudePool({String? grade, String? currentClass}) async {
+    final targetGrade = grade ?? mapClassToGradeBand(currentClass);
+    final url = "$baseUrl/api/v1/assessments/aptitude/generate/assessment-pool?target_grade=$targetGrade";
+    try {
+      final response = await http.get(Uri.parse(url), headers: await _getHeaders());
+      if (response.statusCode == 200) return json.decode(response.body);
+      throw Exception("Failed to load aptitude pool");
+    } catch (e) {
+      throw Exception("Aptitude pool error: $e");
     }
   }
 
   // ── ROADMAP ───────────────────────────────────────────────────────────────
 
-  Future<Map<String, dynamic>> generateAndSaveRoadmap(
-      String careerTitle) async {
+  Future<Map<String, dynamic>> generateAndSaveRoadmap(String careerTitle) async {
     final headers = await _getHeaders();
     try {
       final genUrl = Uri.parse(
           '$baseUrl/api/v1/roadmaps/generate?career=${Uri.encodeComponent(careerTitle)}');
-      final genRes = await http
-          .get(genUrl, headers: headers)
-          .timeout(const Duration(seconds: 60));
+      final genRes = await http.get(genUrl, headers: headers).timeout(const Duration(seconds: 60));
 
-      if (genRes.statusCode != 200) {
-        throw Exception("Failed to generate roadmap: ${genRes.body}");
-      }
+      if (genRes.statusCode != 200) throw Exception("Failed to generate roadmap: ${genRes.body}");
       final roadmapData = json.decode(genRes.body);
 
       final saveUrl = Uri.parse('$baseUrl/api/v1/roadmaps/save');
@@ -212,14 +366,10 @@ class AssessmentService {
           .post(saveUrl, headers: headers, body: json.encode(roadmapData))
           .timeout(const Duration(seconds: 15));
 
-      if (saveRes.statusCode != 201) {
-        throw Exception("Failed to save roadmap: ${saveRes.body}");
-      }
+      if (saveRes.statusCode != 201) throw Exception("Failed to save roadmap: ${saveRes.body}");
 
       final startUrl = Uri.parse('$baseUrl/api/v1/roadmaps/start');
-      await http
-          .post(startUrl, headers: headers)
-          .timeout(const Duration(seconds: 10));
+      await http.post(startUrl, headers: headers).timeout(const Duration(seconds: 10));
 
       return roadmapData;
     } catch (e) {
@@ -260,11 +410,8 @@ class AssessmentService {
   Future<String?> getStudentInviteCode() async {
     final url = "$baseUrl/api/v1/students/invite-code";
     try {
-      final response =
-      await http.get(Uri.parse(url), headers: await _getHeaders());
-      if (response.statusCode == 200) {
-        return json.decode(response.body)['invite_code'];
-      }
+      final response = await http.get(Uri.parse(url), headers: await _getHeaders());
+      if (response.statusCode == 200) return json.decode(response.body)['invite_code'];
       return null;
     } catch (e) {
       return null;
@@ -275,12 +422,10 @@ class AssessmentService {
     final url = "$baseUrl/api/v1/parents/link-student";
     try {
       final response = await http.post(Uri.parse(url),
-          headers: await _getHeaders(),
-          body: json.encode({"invite_code": code}));
+          headers: await _getHeaders(), body: json.encode({"invite_code": code}));
       return {
         "success": response.statusCode == 201 || response.statusCode == 200,
-        "message": json.decode(response.body)['detail'] ??
-            json.decode(response.body)['message'],
+        "message": json.decode(response.body)['detail'] ?? json.decode(response.body)['message'],
       };
     } catch (e) {
       return {"success": false, "message": "Connection error: $e"};
@@ -313,7 +458,6 @@ class AssessmentService {
   }
 
   Future<Map<String, dynamic>?> getWardRoadmap(String studentId) async {
-    // ✅ FIXED: Restored the correct URL pointing to Mridul's endpoint
     final url = "$baseUrl/api/v1/roadmaps/student/$studentId";
     final token = await TokenService.getToken();
     try {
@@ -330,10 +474,7 @@ class AssessmentService {
 
   // ── MENTORSHIP ────────────────────────────────────────────────────────────
 
-  /// GET /api/v1/mentorship/search/
-  /// Returns list of { id (mentor profile UUID), user_id, full_name, expertise, ... }
-  Future<List<dynamic>> searchMentors(
-      {String careerGoal = "technology"}) async {
+  Future<List<dynamic>> searchMentors({String careerGoal = "technology"}) async {
     final url = Uri.parse(
         '$baseUrl/api/v1/mentorship/search/?career_goal=${Uri.encodeComponent(careerGoal)}');
     final response = await http.get(url, headers: await _getHeaders());
@@ -342,19 +483,13 @@ class AssessmentService {
         : throw Exception('Failed to fetch mentors');
   }
 
-  /// GET /api/v1/chat/connections
-  /// Returns list of { user_id, full_name, role, request_type }
-  /// NOTE: does NOT include the mentor's profile UUID (mentor.id).
   Future<List<dynamic>> getAcceptedConnections() async {
     final url = Uri.parse("$baseUrl/api/v1/chat/connections");
     try {
       final response = await http
           .get(url, headers: await _getHeaders())
           .timeout(const Duration(seconds: 10));
-
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      }
+      if (response.statusCode == 200) return json.decode(response.body);
       return [];
     } catch (e) {
       debugPrint("❌ Error fetching accepted mentors: $e");
@@ -362,12 +497,9 @@ class AssessmentService {
     }
   }
 
-  /// GET /api/v1/mentorship/mentors/{mentor_profile_id}
-  /// Given a mentor's PROFILE UUID (Mentor.id), return full mentor data.
   Future<Map<String, dynamic>?> getMentorById(String mentorProfileId) async {
     if (mentorProfileId.isEmpty) return null;
-    final url =
-    Uri.parse('$baseUrl/api/v1/mentorship/mentors/$mentorProfileId');
+    final url = Uri.parse('$baseUrl/api/v1/mentorship/mentors/$mentorProfileId');
     try {
       final response = await http
           .get(url, headers: await _getHeaders())
@@ -380,27 +512,16 @@ class AssessmentService {
     }
   }
 
-  /// Looks up the mentor PROFILE UUID (Mentor.id) for a given user_id.
-  ///
-  /// Strategy: search mentors broadly and find the one whose user_id matches.
-  /// This is needed because /api/v1/chat/connections only returns user_id,
-  /// but /api/v1/availability/{mentor_id} needs the mentor profile UUID.
   Future<String?> getMentorProfileIdByUserId(String userId) async {
     if (userId.isEmpty) return null;
     try {
-      // Search with a broad term to get all mentors, then filter by user_id
       final mentors = await searchMentors(careerGoal: "mentor");
       for (final m in mentors) {
-        if (m['user_id']?.toString() == userId) {
-          return m['id']?.toString();
-        }
+        if (m['user_id']?.toString() == userId) return m['id']?.toString();
       }
-      // If not found with "mentor", try "technology" as fallback
       final mentors2 = await searchMentors(careerGoal: "technology");
       for (final m in mentors2) {
-        if (m['user_id']?.toString() == userId) {
-          return m['id']?.toString();
-        }
+        if (m['user_id']?.toString() == userId) return m['id']?.toString();
       }
       return null;
     } catch (e) {
@@ -412,8 +533,7 @@ class AssessmentService {
   Future<List<dynamic>> getSentRequests() async {
     final url = Uri.parse('$baseUrl/api/v1/mentorship/requests/pending');
     try {
-      final response =
-      await http.get(url, headers: await _getHeaders());
+      final response = await http.get(url, headers: await _getHeaders());
       return response.statusCode == 200 ? json.decode(response.body) : [];
     } catch (e) {
       debugPrint("❌ Error fetching sent requests: $e");
@@ -425,16 +545,13 @@ class AssessmentService {
     final url = Uri.parse('$baseUrl/api/v1/connections/request');
     try {
       final response = await http
-          .post(
-        url,
-        headers: await _getHeaders(),
-        body: json.encode({
-          "mentor_id": mentorId,
-          "message": "I would like to request mentorship from you."
-        }),
-      )
+          .post(url,
+              headers: await _getHeaders(),
+              body: json.encode({
+                "mentor_id": mentorId,
+                "message": "I would like to request mentorship from you."
+              }))
           .timeout(const Duration(seconds: 15));
-
       return response.statusCode == 201;
     } catch (e) {
       debugPrint("❌ Mentorship Request Error: $e");
@@ -442,22 +559,17 @@ class AssessmentService {
     }
   }
 
-  // ── VIDEO CALL / DYTE ───────────────────────────────────────────────────
+  // ── VIDEO CALL / DYTE ─────────────────────────────────────────────────────
 
-  /// POST /api/v1/sessions/{session_id}/join-video
-  /// Hits FastAPI directly to get the Dyte participant token, completely bypassing Node.js.
   Future<String?> getDyteVideoToken(String sessionId) async {
     final url = "$baseUrl/api/v1/sessions/$sessionId/join-video";
-
     try {
-      final response = await http.post(
-        Uri.parse(url),
-        headers: await _getHeaders(),
-      ).timeout(const Duration(seconds: 15));
-
+      final response = await http
+          .post(Uri.parse(url), headers: await _getHeaders())
+          .timeout(const Duration(seconds: 15));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        return data['token']; // The Dyte Participant Token generated by Mridul's backend
+        return data['token'];
       } else {
         debugPrint("Failed to get video token: ${response.body}");
         return null;
